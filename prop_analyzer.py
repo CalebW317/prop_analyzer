@@ -1,56 +1,96 @@
-# prop_analyzer.py
+# prop_analyzer_v2.py
 import pandas as pd
 from pathlib import Path
+from datetime import datetime, timedelta
+
+# Attempt to import nfl_data_py, guide user if not installed
+try:
+    import nfl_data_py as nfl
+except ImportError:
+    print("Module 'nfl_data_py' not found. Please install it by running: pip install nfl-data-py")
+    exit()
 
 # -------------------------------
 # CONFIG
 # -------------------------------
-# Create a folder named 'data' in the same directory as this script
-# and place your historical data CSV files inside it.
-# Example files: '2024_gamelogs.csv', '2023_gamelogs.csv'
 DATA_FOLDER = Path('data')
+CACHE_FILE = DATA_FOLDER / 'nfl_data_cache.csv'
+CACHE_MAX_AGE_HOURS = 24  # How old the cache can be before re-downloading
+YEARS_TO_FETCH = [2021, 2022, 2023, 2024] # Seasons to grab data for
 
 # -------------------------------
-# CORE FUNCTIONS
+# DATA FETCHING & LOADING
 # -------------------------------
 
-def load_historical_data(folder: Path) -> pd.DataFrame:
+def fetch_data_from_api(years: list) -> pd.DataFrame:
     """
-    Loads and combines all historical player game log CSV files from the 'data' folder.
+    Fetches weekly player game data using the nfl_data_py library.
     """
-    print("Loading historical data...")
-    csv_files = list(folder.glob("*.csv"))
-    if not csv_files:
-        print(f"---")
-        print(f"ERROR: No CSV files found in the '{folder}' directory.")
-        print(f"Please create a '{folder}' folder and add your historical data CSVs.")
-        print(f"---")
-        return pd.DataFrame()
-
+    print(f"Fetching fresh data for seasons: {years}...")
     try:
-        df_list = [pd.read_csv(file) for file in csv_files]
-        full_df = pd.concat(df_list, ignore_index=True)
-        print(f"Successfully loaded {len(full_df):,} game records from {len(csv_files)} files.")
-        return full_df
+        # Define the specific columns we need to keep the DataFrame lean
+        columns_to_get = [
+            'player_display_name', 'season', 'week', 'opponent', 'receptions', 
+            'receiving_yards', 'receiving_tds', 'carries', 'rushing_yards', 
+            'rushing_tds', 'completions', 'passing_yards', 'passing_tds'
+        ]
+        df = nfl.import_weekly_data(years=years, columns=columns_to_get)
+        
+        # Rename columns for consistency with our analyzer
+        df.rename(columns={
+            'player_display_name': 'Player', 'season': 'Year', 'week': 'Week',
+            'receptions': 'Rec', 'receiving_yards': 'Rec_Yds', 'receiving_tds': 'Rec_TD',
+            'carries': 'Rush_Att', 'rushing_yards': 'Rush_Yds', 'rushing_tds': 'Rush_TD',
+            'completions': 'Pass_Cmp', 'passing_yards': 'Pass_Yds', 'passing_tds': 'Pass_TD'
+        }, inplace=True)
+
+        # Create a total TD column
+        df['TD'] = df['Rec_TD'] + df['Rush_TD'] + df['Pass_TD']
+        
+        print("Fetch successful.")
+        return df
+
     except Exception as e:
-        print(f"Error loading or parsing CSV files: {e}")
+        print(f"\nAn error occurred while fetching data: {e}")
         return pd.DataFrame()
+
+def get_nfl_data() -> pd.DataFrame:
+    """
+    Main data handler. Loads data from cache if it's recent, otherwise fetches
+    fresh data from the API and updates the cache.
+    """
+    DATA_FOLDER.mkdir(exist_ok=True) # Ensure the data folder exists
+    
+    if CACHE_FILE.exists():
+        # Check how old the file is
+        file_mod_time = datetime.fromtimestamp(CACHE_FILE.stat().st_mtime)
+        if datetime.now() - file_mod_time < timedelta(hours=CACHE_MAX_AGE_HOURS):
+            print(f"Loading data from recent cache file: {CACHE_FILE}")
+            return pd.read_csv(CACHE_FILE)
+        else:
+            print("Cache file is outdated.")
+    
+    # If we're here, cache is missing or old, so fetch new data
+    df = fetch_data_from_api(YEARS_TO_FETCH)
+    if not df.empty:
+        df.to_csv(CACHE_FILE, index=False)
+        print(f"Data saved to cache: {CACHE_FILE}")
+    return df
+
+# -------------------------------
+# ANALYSIS & USER INTERFACE (No changes needed here)
+# -------------------------------
 
 def get_user_input() -> tuple:
     """
     Prompts the user to enter the player, stat type, and prop line for analysis.
-    Returns a tuple: (player_name, stat_column_in_df, user_friendly_stat_name, prop_line)
     """
     print("\n" + "-"*50)
     player_name = input("Enter the player's full name: ")
 
-    # This map allows you to use user-friendly names that correspond to your CSV columns
-    # IMPORTANT: Adjust the keys ('Rec', 'Rush', etc.) to match the column names in your CSV files.
     stat_map = {
-        "1": ("Rec_Yds", "Receiving Yards"),
-        "2": ("Rush_Yds", "Rushing Yards"),
-        "3": ("Pass_Yds", "Passing Yards"),
-        "4": ("Rec", "Receptions"),
+        "1": ("Rec_Yds", "Receiving Yards"), "2": ("Rush_Yds", "Rushing Yards"),
+        "3": ("Pass_Yds", "Passing Yards"), "4": ("Rec", "Receptions"),
         "5": ("TD", "Total Touchdowns"),
     }
 
@@ -77,38 +117,22 @@ def analyze_player_prop(df: pd.DataFrame, player_name: str, stat_col: str, stat_
     """
     Analyzes a player's historical data against a given prop line and prints a recommendation.
     """
-    # Find all games for the specified player (case-insensitive search)
-    # The 'Player' key must match the player name column in your CSV
     player_df = df[df['Player'].str.contains(player_name, case=False, na=False)].copy()
 
     if player_df.empty:
-        print(f"\n--- No historical data found for a player containing the name '{player_name}'. Please check spelling. ---")
+        print(f"\n--- No historical data found for a player containing '{player_name}'. Check spelling. ---")
         return
 
-    # Check if the stat column exists in the DataFrame
-    if stat_col not in player_df.columns:
-        print(f"\n--- ERROR: The stat column '{stat_col}' does not exist in your data. ---")
-        print(f"Available columns are: {list(player_df.columns)}")
-        return
-
-    # Convert stat column to numeric, coercing errors to NaN, then fill missing values with 0
     player_df[stat_col] = pd.to_numeric(player_df[stat_col], errors='coerce').fillna(0)
 
-    # --- The "Formula" Section ---
     games_played = len(player_df)
     average = player_df[stat_col].mean()
     median = player_df[stat_col].median()
-    
-    # Calculate consistency (hit rate)
     games_over = (player_df[stat_col] > prop_line).sum()
     hit_rate = (games_over / games_played) * 100 if games_played > 0 else 0
-    
-    # Calculate recent performance (last 5 games)
-    # The .sort_values part assumes your data is not pre-sorted by date/week
     recent_df = player_df.sort_values(by=['Year', 'Week'], ascending=[True, True]).tail(5)
     recent_average = recent_df[stat_col].mean() if not recent_df.empty else 0
 
-    # --- Generate Recommendation using a simple scoring system ---
     score = 0
     if average > prop_line: score += 1
     if median > prop_line: score += 1
@@ -117,7 +141,6 @@ def analyze_player_prop(df: pd.DataFrame, player_name: str, stat_col: str, stat_
 
     recommendation = "Higher" if score >= 3 else "Lower"
 
-    # --- Print Formatted Output ---
     print("\n" + "="*50)
     print(f"Analysis for: {player_df['Player'].iloc[0]} | {stat_desc}")
     print(f"Prop Line: {prop_line}")
@@ -131,22 +154,21 @@ def analyze_player_prop(df: pd.DataFrame, player_name: str, stat_col: str, stat_
     print(f"RECOMMENDATION:   ** {recommendation} **")
     print("="*50)
 
+# -------------------------------
+# MAIN EXECUTION
+# -------------------------------
+
 def main():
     """Main function to run the prop analyzer."""
-    full_df = load_historical_data(DATA_FOLDER)
+    full_df = get_nfl_data()
     if full_df.empty:
-        # The error message is handled in the loading function
+        print("Could not load or fetch NFL data. Exiting.")
         return
         
-    # Main loop to allow for continuous analysis
     while True:
-        # Unpack all four return values from the input function
         player, stat_column, stat_description, line = get_user_input()
         
-        if not player or not stat_column:
-            # If input is invalid, loop will ask again or exit
-            pass
-        else:
+        if player and stat_column:
             analyze_player_prop(full_df, player, stat_column, stat_description, line)
 
         again = input("\nAnalyze another prop? (y/n): ").lower()
