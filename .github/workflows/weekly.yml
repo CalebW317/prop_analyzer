@@ -40,6 +40,8 @@ jobs:
 
       - name: run discover_markets script
         run: python discover_markets.py
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
 
       - name: Upload weekly CSV as artifact
         if: success() || failure()  # ensure CSV is uploaded even if script fails partially
