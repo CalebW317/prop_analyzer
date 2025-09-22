@@ -1,0 +1,7 @@
+ - name: Run underdog script
+        run: python underdog_dashboard.py
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          STAKE: 1
+          UNDERDOG_ODDS_THRESHOLD: 1.9
