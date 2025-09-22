@@ -105,24 +105,40 @@ current_week = get_current_week()
 # -------------------------------
 def fetch_player_stats_pfr():
     try:
-        # Rushing
+        # ---- RUSHING ----
         rush_url = "https://www.pro-football-reference.com/years/2025/rushing.htm"
         df_rush_list = pd.read_html(rush_url)
         df_rush = df_rush_list[0]
-        df_rush = df_rush[df_rush['Player'] != 'Player'].fillna(0)
-        df_rush = df_rush[['Player', 'Tm', 'Yds', 'TD']]
-        df_rush.rename(columns={'Yds':'rush_yds', 'TD':'rush_tds'}, inplace=True)
 
-        # Receiving
+        # Flatten multi-level columns
+        if isinstance(df_rush.columns, pd.MultiIndex):
+            df_rush.columns = [' '.join([str(c) for c in col if c]) for col in df_rush.columns]
+
+        player_col = [c for c in df_rush.columns if 'Player' in c][0]
+        team_col = [c for c in df_rush.columns if c in ['Tm','Team']][0]
+
+        df_rush = df_rush[df_rush[player_col] != 'Player'].fillna(0)
+        df_rush = df_rush[[player_col, team_col, 'Yds', 'TD']]
+        df_rush.rename(columns={player_col:'Player', team_col:'Tm', 'Yds':'rush_yds', 'TD':'rush_tds'}, inplace=True)
+
+        # ---- RECEIVING ----
         rec_url = "https://www.pro-football-reference.com/years/2025/receiving.htm"
         df_rec_list = pd.read_html(rec_url)
         df_rec = df_rec_list[0]
-        df_rec = df_rec[df_rec['Player'] != 'Player'].fillna(0)
-        df_rec = df_rec[['Player', 'Tm', 'Yds', 'TD']]
-        df_rec.rename(columns={'Yds':'rec_yds', 'TD':'rec_tds'}, inplace=True)
 
-        # Merge
+        if isinstance(df_rec.columns, pd.MultiIndex):
+            df_rec.columns = [' '.join([str(c) for c in col if c]) for col in df_rec.columns]
+
+        player_col = [c for c in df_rec.columns if 'Player' in c][0]
+        team_col = [c for c in df_rec.columns if c in ['Tm','Team']][0]
+
+        df_rec = df_rec[df_rec[player_col] != 'Player'].fillna(0)
+        df_rec = df_rec[[player_col, team_col, 'Yds', 'TD']]
+        df_rec.rename(columns={player_col:'Player', team_col:'Tm', 'Yds':'rec_yds', 'TD':'rec_tds'}, inplace=True)
+
+        # ---- MERGE ----
         df = pd.merge(df_rush, df_rec, on=['Player','Tm'], how='outer').fillna(0)
+
         players = []
         for _, r in df.iterrows():
             players.append({
@@ -133,9 +149,11 @@ def fetch_player_stats_pfr():
                 "tds": safe_float(r['rush_tds'] + r['rec_tds']),
                 "snap_count": 1.0
             })
+
         df_final = pd.DataFrame(players)
         print(f"[DEBUG] player_stats_df shape: {df_final.shape}")
         return df_final
+
     except Exception as e:
         print("[ERROR] Exception fetching PFR player stats:", e)
         traceback.print_exc()
@@ -146,32 +164,47 @@ def fetch_player_stats_pfr():
 # -------------------------------
 def fetch_opponent_defense_pfr():
     url = "https://www.pro-football-reference.com/years/2025/opp.htm"
+    print(f"[DEBUG] Fetching PFR opponent defense stats from {url}")
     try:
         df_list = pd.read_html(url)
         df_def = df_list[0]
-        df_def = df_def[df_def['Team'] != 'Team'].fillna(0)
+
+        if isinstance(df_def.columns, pd.MultiIndex):
+            df_def.columns = [' '.join([str(c) for c in col if c]) for col in df_def.columns]
+
+        team_col = [c for c in df_def.columns if c in ['Team','Tm']][0]
+        df_def = df_def[df_def[team_col] != 'Team'].fillna(0)
+
         defense_rows = []
         for _, r in df_def.iterrows():
-            team = r['Team']
+            team = r[team_col]
+            rush_allowed = safe_float(r.get('Yds.1', 0))
+            rec_allowed = safe_float(r.get('Yds.2', 0))
+            td_allowed = safe_float(r.get('TD.1', 0))
+            td_pass_allowed = safe_float(r.get('TD.2', 0))
+
             defense_rows.append({
                 "team": team,
-                "rush_allowed": safe_float(r.get('Yds.1', 0)),
-                "rec_allowed": safe_float(r.get('Yds.2', 0)),
-                "td_allowed": safe_float(r.get('TD.1', 0)),
-                "td_pass_allowed": safe_float(r.get('TD.2', 0))
+                "rush_allowed": rush_allowed,
+                "rec_allowed": rec_allowed,
+                "td_allowed": td_allowed,
+                "td_pass_allowed": td_pass_allowed
             })
+
         df_final = pd.DataFrame(defense_rows)
         print(f"[DEBUG] defense_df shape: {df_final.shape}")
         return df_final
+
     except Exception as e:
         print("[ERROR] Exception fetching PFR defense stats:", e)
         traceback.print_exc()
         return pd.DataFrame()
 
 # -------------------------------
-# STEP 3: Fetch Live Odds
+# STEP 3: Fetch Live Odds (the-odds-api)
 # -------------------------------
 def fetch_live_odds(player_team_map):
+    print("[DEBUG] Fetching live odds from Odds API")
     params = {
         'apiKey': ODDS_API_KEY,
         'regions': ODDS_REGION,
@@ -180,8 +213,14 @@ def fetch_live_odds(player_team_map):
     }
     try:
         resp = requests.get(ODDS_API_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
-        with open("odds_api_debug.json", "w", encoding="utf-8") as f:
-            f.write(resp.text)
+        print(f"[DEBUG] Odds API HTTP {resp.status_code}")
+        # Save raw JSON for debugging
+        try:
+            with open("odds_api_debug.json", "w", encoding="utf-8") as f:
+                f.write(resp.text)
+        except Exception as e:
+            print("[WARN] Failed to write odds_api_debug.json:", e)
+
         data = resp.json() if resp.status_code == 200 else []
         odds_rows = []
         for game in data:
@@ -203,6 +242,8 @@ def fetch_live_odds(player_team_map):
                                 team = home_team
                             elif last and last in normalize_name(away_team):
                                 team = away_team
+                            else:
+                                team = None
                         opponent = away_team if team == home_team else home_team
                         odds_rows.append({
                             "player": player_name,
@@ -211,9 +252,7 @@ def fetch_live_odds(player_team_map):
                             "odds": odds_val,
                             "stat_type": key,
                             "team": team,
-                            "opponent": opponent,
-                            "home_team": home_team,
-                            "away_team": away_team
+                            "opponent": opponent
                         })
         df = pd.DataFrame(odds_rows)
         print(f"[DEBUG] odds_df shape: {df.shape}")
@@ -227,10 +266,11 @@ def fetch_live_odds(player_team_map):
 # RUN FETCHES
 # -------------------------------
 player_stats_df = fetch_player_stats_pfr()
+player_team_map = {normalize_name(r['player']): r['team'] for _, r in player_stats_df.iterrows()} if not player_stats_df.empty else {}
+odds_df = fetch_live_odds(player_team_map)
 defense_df = fetch_opponent_defense_pfr()
 
-player_team_map = {normalize_name(r['player']): r['team'] for _, r in player_stats_df.iterrows()}
-odds_df = fetch_live_odds(player_team_map)
+print(f"[DEBUG] Shapes -> player_stats: {player_stats_df.shape}, odds: {odds_df.shape}, defense: {defense_df.shape}")
 
 if player_stats_df.empty or odds_df.empty or defense_df.empty:
     print("[ERROR] One or more data sources are empty. Exiting.")
@@ -359,3 +399,4 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
