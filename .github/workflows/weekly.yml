@@ -45,3 +45,13 @@ jobs:
         with:
           name: underdog-logs
           path: underdog_run.log
+
+      - name: Commit & Push Updated CSV
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add underdog_picks_master.csv
+          git commit -m "Update underdog picks for week $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
