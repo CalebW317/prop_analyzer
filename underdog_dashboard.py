@@ -71,12 +71,30 @@ def extract_player_name(outcome_name: str):
     name = re.sub(r'\d+$', '', name).strip()
     return name
 
+def flatten_columns(df):
+    """Flatten MultiIndex columns into single strings."""
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [' '.join([str(i) for i in col if i]).strip() for col in df.columns.values]
+    else:
+        df.columns = [str(col) for col in df.columns]
+    return df
+
+def detect_stat_column(df, keywords):
+    """Return the first column name containing any of the keywords (case-insensitive)."""
+    for col in df.columns:
+        col_str = str(col)
+        for kw in keywords:
+            if kw.lower() in col_str.lower():
+                return col_str
+    return None
+
 def detect_column(df, keywords):
     """Return first column name containing any of the keywords (case-insensitive)."""
     for col in df.columns:
+        col_str = str(col)
         for kw in keywords:
-            if kw.lower() in str(col).lower():
-                return col
+            if kw.lower() in col_str.lower():
+                return col_str
     return None
 
 def get_current_week():
@@ -100,17 +118,17 @@ def fetch_player_stats_pfr():
         rush_url = "https://www.pro-football-reference.com/years/2025/rushing.htm"
         df_rush_list = pd.read_html(rush_url)
         df_rush = df_rush_list[0].fillna(0)
+        df_rush = flatten_columns(df_rush)
 
-        # Detect columns dynamically
         player_col = detect_column(df_rush, ['Player', 'player'])
         team_col = detect_column(df_rush, ['Tm', 'Team', 'team'])
         rush_yds_col = detect_stat_column(df_rush, ['Yds','Rushing Yds'])
         rush_td_col = detect_stat_column(df_rush, ['TD','Rushing TD'])
 
-        if not player_col or not team_col or not rush_yds_col or not rush_td_col:
+        if not all([player_col, team_col, rush_yds_col, rush_td_col]):
             raise ValueError(f"Could not detect rushing columns: {df_rush.columns}")
 
-        df_rush = df_rush[df_rush[player_col] != player_col]  # remove repeated header rows
+        df_rush = df_rush[df_rush[player_col] != player_col]
         df_rush = df_rush[[player_col, team_col, rush_yds_col, rush_td_col]].copy()
         df_rush.rename(columns={player_col:'Player', team_col:'Tm',
                                 rush_yds_col:'rush_yds', rush_td_col:'rush_tds'}, inplace=True)
@@ -119,13 +137,14 @@ def fetch_player_stats_pfr():
         rec_url = "https://www.pro-football-reference.com/years/2025/receiving.htm"
         df_rec_list = pd.read_html(rec_url)
         df_rec = df_rec_list[0].fillna(0)
+        df_rec = flatten_columns(df_rec)
 
         player_col = detect_column(df_rec, ['Player', 'player'])
         team_col = detect_column(df_rec, ['Tm', 'Team', 'team'])
         rec_yds_col = detect_stat_column(df_rec, ['Yds','Receiving Yds'])
         rec_td_col = detect_stat_column(df_rec, ['TD','Receiving TD'])
 
-        if not player_col or not team_col or not rec_yds_col or not rec_td_col:
+        if not all([player_col, team_col, rec_yds_col, rec_td_col]):
             raise ValueError(f"Could not detect receiving columns: {df_rec.columns}")
 
         df_rec = df_rec[df_rec[player_col] != player_col]
@@ -144,7 +163,7 @@ def fetch_player_stats_pfr():
                 "rush_yds": safe_float(r['rush_yds']),
                 "rec_yds": safe_float(r['rec_yds']),
                 "tds": safe_float(r['rush_tds'] + r['rec_tds']),
-                "snap_count": 1.0  # placeholder; PFR doesn’t have snap counts
+                "snap_count": 1.0
             })
 
         df_final = pd.DataFrame(players)
@@ -159,32 +178,24 @@ def fetch_player_stats_pfr():
 # -------------------------------
 # FETCH DEFENSE
 # -------------------------------
-def detect_stat_column(df, keywords):
-    """Return the first column name containing any of the keywords (case-insensitive)."""
-    for col in df.columns:
-        for kw in keywords:
-            if kw.lower() in col.lower():
-                return col
-    return None
-
 def fetch_opponent_defense_pfr():
     url = "https://www.pro-football-reference.com/years/2025/opp.htm"
     print(f"[DEBUG] Fetching PFR opponent defense stats from {url}")
     try:
         df_list = pd.read_html(url)
         df_def = df_list[0].fillna(0)
+        df_def = flatten_columns(df_def)
 
-        # Detect columns
         team_col = detect_column(df_def, ['Team', 'Tm', 'team'])
         rush_allowed_col = detect_stat_column(df_def, ['Rushing Yds','Yds.1','Rush Yds'])
         pass_allowed_col = detect_stat_column(df_def, ['Passing Yds','Yds.2','Pass Yds'])
         rush_td_col = detect_stat_column(df_def, ['Rushing TD','TD.1'])
         pass_td_col = detect_stat_column(df_def, ['Passing TD','TD.2'])
 
-        if not team_col or not rush_allowed_col or not pass_allowed_col or not rush_td_col or not pass_td_col:
+        if not all([team_col, rush_allowed_col, pass_allowed_col, rush_td_col, pass_td_col]):
             raise ValueError(f"Could not detect all defense columns: {df_def.columns}")
 
-        df_def = df_def[df_def[team_col] != team_col]  # remove repeated header rows
+        df_def = df_def[df_def[team_col] != team_col]
 
         defense_rows = []
         for _, r in df_def.iterrows():
@@ -204,7 +215,6 @@ def fetch_opponent_defense_pfr():
         print("[ERROR] Exception fetching PFR defense stats:", e)
         traceback.print_exc()
         return pd.DataFrame()
-
 
 # -------------------------------
 # FETCH ODDS
@@ -383,4 +393,5 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
