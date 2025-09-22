@@ -1,0 +1,5 @@
+# Ignore the data cache folder and its contents
+data/
+
+# Ignore Python's cache files
+__pycache__/
