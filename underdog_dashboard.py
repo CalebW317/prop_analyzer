@@ -241,10 +241,8 @@ def fetch_live_odds(player_team_map):
     """
     print("[DEBUG] Fetching live odds from Odds API")
 
-    # Define the specific player prop markets you want.
-    # This is more efficient than fetching all props for an event.
-    # Common markets: player_passing_yds, player_rushing_yds, player_receiving_yds, player_anytime_touchdown
-    PLAYER_PROP_MARKETS = 'player_rushing_yds,player_receiving_yds,player_anytime_touchdown'
+    # CORRECTED: Use the official market keys for NFL props.
+    PLAYER_PROP_MARKETS = 'player_rush_yds_over_under,player_rec_yds_over_under,player_tds_over_under'
 
     params = {
         'apiKey': ODDS_API_KEY,
@@ -256,23 +254,23 @@ def fetch_live_odds(player_team_map):
         resp = requests.get(ODDS_API_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
         print(f"[DEBUG] Odds API HTTP {resp.status_code}")
         
-        # Save the raw response for debugging
         with open("odds_api_debug.json", "w", encoding="utf-8") as f:
             f.write(resp.text)
 
         if resp.status_code != 200:
-            print(f"[ERROR] Odds API returned status {resp.status_code}: {resp.text}")
+            # Added more detailed error printing from the JSON response
+            error_details = resp.json()
+            print(f"[ERROR] Odds API returned status {resp.status_code}: {error_details.get('message')}")
             return pd.DataFrame()
 
         games = resp.json()
         odds_rows = []
 
-        # Map API market keys to your internal stat_type names
+        # CORRECTED: Update the map to match the new market keys
         STAT_TYPE_MAP = {
-            'player_rushing_yds': 'rush_yds',
-            'player_receiving_yds': 'rec_yds',
-            'player_anytime_touchdown': 'tds',
-            # Add other mappings here if you add more markets
+            'player_rush_yds_over_under': 'rush_yds',
+            'player_rec_yds_over_under': 'rec_yds',
+            'player_tds_over_under': 'tds',
         }
 
         for game in games:
@@ -284,20 +282,17 @@ def fetch_live_odds(player_team_map):
                     market_key = market.get('key')
                     stat_type = STAT_TYPE_MAP.get(market_key)
 
-                    # Skip markets we aren't interested in
                     if not stat_type:
                         continue
                     
                     for outcome in market.get('outcomes', []):
-                        # The player's name is in the 'description' field for player props
                         player_name = outcome.get('description')
                         if not player_name:
-                            continue # Skip if no player name found
+                            continue
 
                         prop_line = safe_float(outcome.get('point'))
                         odds_val = safe_float(outcome.get('price'))
 
-                        # Infer team and opponent
                         team = None
                         player_norm = normalize_name(player_name)
                         if player_norm in player_team_map:
@@ -471,6 +466,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
