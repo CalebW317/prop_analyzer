@@ -40,3 +40,16 @@ jobs:
         with:
           name: underdog-weekly-csv
           path: underdog_picks_master.csv
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: underdog-debug
+          path: |
+            espn_player_debug.html
+            espn_defense_debug.html
+            odds_api_debug.json
+            espn_player_debug_error.html
+            espn_defense_debug_error.html
+
