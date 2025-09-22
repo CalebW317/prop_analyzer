@@ -11,6 +11,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import traceback
 from difflib import get_close_matches
+import concurrent.futures
 
 # -------------------------------
 # CONFIG
@@ -232,7 +233,7 @@ def fetch_opponent_defense_pfr():
         return pd.DataFrame()
 
 # -------------------------------
-# FETCH ODDS
+# FETCH PLAYER PROPS ODDS (ASYNC)
 # -------------------------------
 def fetch_live_odds(player_team_map):
     print("[DEBUG] Fetching live odds from Odds API")
@@ -243,11 +244,15 @@ def fetch_live_odds(player_team_map):
         'oddsFormat': ODDS_FORMAT
     }
     try:
+        # First, fetch upcoming NFL games
         resp = requests.get(ODDS_API_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
         print(f"[DEBUG] Odds API HTTP {resp.status_code}")
+        games = resp.json() if resp.status_code == 200 else []
+
         with open("odds_api_debug.json", "w", encoding="utf-8") as f:
-            f.write(resp.text)
-        data = resp.json() if resp.status_code == 200 else []
+            f.write(json.dumps(games, indent=2))
+
+        odds_rows = []
 
         def infer_stat_type(outcome_name):
             if not outcome_name: return 'other'
@@ -258,47 +263,74 @@ def fetch_live_odds(player_team_map):
             if any(k in s for k in ['receptions','rec']): return 'receptions'
             return 'other'
 
-        odds_rows = []
-        for game in data:
+        def fetch_event_props(game):
+            event_odds = []
+            game_id = game.get('id')
             home_team = game.get('home_team')
             away_team = game.get('away_team')
 
-            for bookmaker in game.get('bookmakers', []):
-                for market in bookmaker.get('markets', []):
-                    for outcome in market.get('outcomes', []):
-                        outcome_name = outcome.get('name')
-                        prop_line = safe_float(outcome.get('point'))
-                        odds_val = safe_float(outcome.get('price'))
+            event_url = f"https://api.the-odds-api.com/v4/events/{game_id}/odds"
+            event_params = {
+                'apiKey': ODDS_API_KEY,
+                'regions': ODDS_REGION,
+                'markets': 'player_props',
+                'oddsFormat': ODDS_FORMAT
+            }
 
-                        # Extract player name
-                        player_name = extract_player_name(outcome_name)
-                        if not player_name:
-                            continue  # Skip non-player props
+            try:
+                event_resp = requests.get(event_url, params=event_params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
+                if event_resp.status_code != 200:
+                    return []
 
-                        # Determine stat type
-                        stat_type = infer_stat_type(outcome_name)
-                        if stat_type == 'other':
-                            continue  # Skip non-player props
+                event_data = event_resp.json()
+                for bookmaker in event_data.get('bookmakers', []):
+                    for market in bookmaker.get('markets', []):
+                        for outcome in market.get('outcomes', []):
+                            outcome_name = outcome.get('name')
+                            prop_line = safe_float(outcome.get('point'))
+                            odds_val = safe_float(outcome.get('price'))
 
-                        # Infer team from player_team_map
-                        player_norm = normalize_name(player_name)
-                        team = player_team_map.get(player_norm)
-                        # Assign opponent
-                        opponent = away_team if team == home_team else home_team
+                            player_name_raw = extract_player_name(outcome_name)
+                            player_name = player_name_raw.strip() if player_name_raw else outcome_name
 
-                        odds_rows.append({
-                            "player": player_name,
-                            "player_raw": outcome_name,
-                            "prop_line": prop_line,
-                            "odds": odds_val,
-                            "stat_type": stat_type,
-                            "team": team,
-                            "opponent": opponent
-                        })
+                            # Infer team
+                            team = None
+                            player_norm = normalize_name(player_name)
+                            if player_norm in player_team_map:
+                                team = player_team_map[player_norm]
+                            opponent = away_team if team == home_team else home_team
+
+                            stat_type = infer_stat_type(outcome_name)
+                            if stat_type == 'other':
+                                continue
+
+                            event_odds.append({
+                                "player": player_name,
+                                "player_raw": outcome_name,
+                                "prop_line": prop_line,
+                                "odds": odds_val,
+                                "stat_type": stat_type,
+                                "team": team,
+                                "opponent": opponent
+                            })
+            except Exception as e:
+                print(f"[ERROR] Event {game_id} fetch failed:", e)
+            return event_odds
+
+        # Fetch all event props concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(fetch_event_props, games))
+
+        # Flatten list of lists
+        for r in results:
+            odds_rows.extend(r)
 
         df = pd.DataFrame(odds_rows)
-        print(f"[DEBUG] odds_df shape: {df.shape}")
-        print(f"[DEBUG] Unique stat_type values in odds_df:\n{df['stat_type'].unique()}")
+        if not df.empty and 'stat_type' in df.columns:
+            print(f"[DEBUG] odds_df shape: {df.shape}")
+            print(f"[DEBUG] Unique stat_type values in odds_df:\n{df['stat_type'].unique()}")
+        else:
+            print("[DEBUG] odds_df is empty or missing 'stat_type' column")
         return df
 
     except Exception as e:
@@ -450,6 +482,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
