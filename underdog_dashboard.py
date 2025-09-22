@@ -241,8 +241,8 @@ def fetch_live_odds(player_team_map):
     """
     print("[DEBUG] Fetching live odds from Odds API")
 
-    # CORRECTED: Use the official market keys for NFL props.
-    PLAYER_PROP_MARKETS = 'player_rush_yds_over_under,player_rec_yds_over_under,player_tds_over_under'
+    # FINAL CORRECTION: Use the official market keys without "_over_under".
+    PLAYER_PROP_MARKETS = 'player_rushing_yards,player_receiving_yards,player_touchdowns'
 
     params = {
         'apiKey': ODDS_API_KEY,
@@ -258,7 +258,6 @@ def fetch_live_odds(player_team_map):
             f.write(resp.text)
 
         if resp.status_code != 200:
-            # Added more detailed error printing from the JSON response
             error_details = resp.json()
             print(f"[ERROR] Odds API returned status {resp.status_code}: {error_details.get('message')}")
             return pd.DataFrame()
@@ -266,11 +265,11 @@ def fetch_live_odds(player_team_map):
         games = resp.json()
         odds_rows = []
 
-        # CORRECTED: Update the map to match the new market keys
+        # FINAL CORRECTION: Update the map to match the correct market keys.
         STAT_TYPE_MAP = {
-            'player_rush_yds_over_under': 'rush_yds',
-            'player_rec_yds_over_under': 'rec_yds',
-            'player_tds_over_under': 'tds',
+            'player_rushing_yards': 'rush_yds',
+            'player_receiving_yards': 'rec_yds',
+            'player_touchdowns': 'tds',
         }
 
         for game in games:
@@ -466,6 +465,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
