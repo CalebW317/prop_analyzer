@@ -66,16 +66,25 @@ def normalize_team(s: str):
 
 def extract_player_name(outcome_name: str):
     """
-    Extracts the player name from a prop string.
-    Example: "Justin Jefferson Over 85.5 Receiving Yds" -> "Justin Jefferson"
+    Extract player name from a prop description.
+    Handles common formats like:
+        - "Justin Jefferson Over 75.5 Receiving Yards"
+        - "Derrick Henry - Rush Yards Over 100.5"
+        - "Patrick Mahomes / Passing TDs Over 2.5"
     """
     if not outcome_name: return None
-    s = re.sub(r'over|under', '', outcome_name, flags=re.I)
-    s = re.sub(r'\(.*?\)', '', s)  # remove parentheses
-    s = re.sub(r'\d+\.?\d*\s*(yds|yards|td|touchdowns|receptions|rec)?', '', s, flags=re.I)
-    s = re.sub(r'[-–—]', ' ', s)
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s or None
+    s = outcome_name.strip()
+
+    # Split on common separators for props
+    parts = re.split(r'\s+(?:over|under|vs)\b|\(|\)|\/|\-|\–', s, flags=re.I)
+    name_candidate = parts[0].strip() if parts else s
+
+    # Remove trailing numbers or special characters
+    name_candidate = re.sub(r'[\d\.\s]+$', '', name_candidate).strip()
+    # Normalize whitespace
+    name_candidate = re.sub(r'\s+', ' ', name_candidate)
+
+    return name_candidate if name_candidate else s
 
 def flatten_columns(df):
     """Flatten MultiIndex columns into single strings."""
@@ -236,7 +245,7 @@ def fetch_live_odds(player_team_map):
     try:
         resp = requests.get(ODDS_API_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
         print(f"[DEBUG] Odds API HTTP {resp.status_code}")
-        with open("odds_api_debug.json","w", encoding="utf-8") as f:
+        with open("odds_api_debug.json", "w", encoding="utf-8") as f:
             f.write(resp.text)
         data = resp.json() if resp.status_code == 200 else []
 
@@ -253,6 +262,7 @@ def fetch_live_odds(player_team_map):
         for game in data:
             home_team = game.get('home_team')
             away_team = game.get('away_team')
+
             for bookmaker in game.get('bookmakers', []):
                 for market in bookmaker.get('markets', []):
                     for outcome in market.get('outcomes', []):
@@ -261,18 +271,20 @@ def fetch_live_odds(player_team_map):
                         odds_val = safe_float(outcome.get('price'))
 
                         # Extract player name
-                        player_name_raw = extract_player_name(outcome_name)
-                        player_name = player_name_raw.strip() if player_name_raw else outcome_name
-
-                        # Infer team from player_team_map
-                        team = None
-                        player_norm = normalize_name(player_name)
-                        if player_norm in player_team_map:
-                            team = player_team_map[player_norm]
-                        opponent = away_team if team == home_team else home_team
+                        player_name = extract_player_name(outcome_name)
+                        if not player_name:
+                            continue  # Skip non-player props
 
                         # Determine stat type
                         stat_type = infer_stat_type(outcome_name)
+                        if stat_type == 'other':
+                            continue  # Skip non-player props
+
+                        # Infer team from player_team_map
+                        player_norm = normalize_name(player_name)
+                        team = player_team_map.get(player_norm)
+                        # Assign opponent
+                        opponent = away_team if team == home_team else home_team
 
                         odds_rows.append({
                             "player": player_name,
@@ -363,27 +375,44 @@ df['rush_usage'] = df['rush_yds'] / df['snap_count']
 df['rec_usage'] = df['rec_yds'] / df['snap_count']
 
 # -------------------------------
-# MODEL & EV
+# MODEL & EV (PLAYER PROPS ONLY)
 # -------------------------------
 master_rows = []
-for stat in ['rush_yds','rec_yds','tds']:
+
+# Only consider player props: rush_yds, rec_yds, tds
+valid_stats = ['rush_yds', 'rec_yds', 'tds']
+
+for stat in valid_stats:
     stat_map = {'rush_yds':'rush_avg_3','rec_yds':'rec_avg_3','tds':'td_rate'}
-    keyword = stat.split('_')[0]
-    df['stat_type'] = df.get('stat_type','').astype(str)
-    df_stat = df[df['stat_type'].str.contains(keyword,case=False,na=False)].copy()
-    if df_stat.empty or len(df_stat) < 6: continue
+
+    # Filter df for this stat type
+    df_stat = df[df['stat_type'] == stat].copy()
+    if df_stat.empty or len(df_stat) < 6:
+        continue
+
+    # Compute target variable
     df_stat['over_hit'] = (df_stat[stat_map[stat]].fillna(0) > df_stat['prop_line'].fillna(0)).astype(int)
-    features = [f for f in ['rush_avg_3','rec_avg_3','td_rate','rush_vs_defense','rec_vs_defense','td_vs_defense','rush_usage','rec_usage'] if f in df_stat.columns]
+
+    # Features for the model
+    features = [f for f in ['rush_avg_3','rec_avg_3','td_rate',
+                             'rush_vs_defense','rec_vs_defense','td_vs_defense',
+                             'rush_usage','rec_usage'] if f in df_stat.columns]
     X = df_stat[features].fillna(0)
     y = df_stat['over_hit']
+
+    # Train model or fallback if y is constant
     if y.nunique() == 1:
         prob_over = float(y.mean())
         df_stat['prob_over'] = prob_over
     else:
         model = RandomForestClassifier(n_estimators=200, random_state=42)
-        model.fit(X,y)
+        model.fit(X, y)
         df_stat['prob_over'] = model.predict_proba(X)[:,1]
+
+    # Calculate expected value
     df_stat['ev'] = (df_stat['prob_over']*df_stat['odds']) - ((1-df_stat['prob_over'])*STAKE)
+
+    # Only pick underdogs above the threshold
     underdogs = df_stat[df_stat['odds'] > UNDERDOG_ODDS_THRESHOLD].copy()
     if not underdogs.empty:
         underdogs['stat_type'] = stat
@@ -421,6 +450,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
