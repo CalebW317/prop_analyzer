@@ -230,44 +230,43 @@ def fetch_live_odds(player_team_map):
     try:
         resp = requests.get(ODDS_API_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
         print(f"[DEBUG] Odds API HTTP {resp.status_code}")
-        with open("odds_api_debug.json", "w", encoding="utf-8") as f:
+        with open("odds_api_debug.json","w", encoding="utf-8") as f:
             f.write(resp.text)
-
         data = resp.json() if resp.status_code == 200 else []
-        odds_rows = []
 
+        def infer_stat_type(outcome_name):
+            s = outcome_name.lower() if outcome_name else ''
+            if 'rush' in s and 'yd' in s: return 'rush_yds'
+            if 'rec' in s and 'yd' in s: return 'rec_yds'
+            if re.search(r'\btd\b', s): return 'tds'
+            return 'other'
+
+        odds_rows = []
         for game in data:
             home_team = game.get('home_team')
             away_team = game.get('away_team')
-
             for bookmaker in game.get('bookmakers', []):
                 for market in bookmaker.get('markets', []):
                     for outcome in market.get('outcomes', []):
-                        outcome_name = outcome.get('name') or ''
+                        outcome_name = outcome.get('name')
                         prop_line = safe_float(outcome.get('point'))
                         odds_val = safe_float(outcome.get('price'))
+
+                        # Extract player name
                         player_name_raw = extract_player_name(outcome_name)
                         player_name = player_name_raw.strip() if player_name_raw else outcome_name
 
-                        # Determine stat_type from outcome name
-                        outcome_lower = outcome_name.lower()
-                        if 'rush' in outcome_lower or 'rushing' in outcome_lower:
-                            stat_type = 'rush_yds'
-                        elif 'rec' in outcome_lower or 'receive' in outcome_lower or 'receiving' in outcome_lower:
-                            stat_type = 'rec_yds'
-                        elif 'td' in outcome_lower or 'touchdown' in outcome_lower:
-                            stat_type = 'tds'
-                        else:
-                            stat_type = 'other'
-
                         # Infer team if missing
                         team = None
-                        last_name = normalize_name(player_name).split()[-1] if player_name else ''
+                        last = normalize_name(player_name).split()[-1] if player_name else ''
                         hnorm = normalize_team(home_team)
                         anorm = normalize_team(away_team)
-                        if last_name in hnorm: team = home_team
-                        elif last_name in anorm: team = away_team
+                        if last in hnorm: team = home_team
+                        elif last in anorm: team = away_team
                         opponent = away_team if team == home_team else home_team
+
+                        # Determine stat type
+                        stat_type = infer_stat_type(outcome_name)
 
                         odds_rows.append({
                             "player": player_name,
@@ -288,7 +287,7 @@ def fetch_live_odds(player_team_map):
         print("[ERROR] Exception fetching odds:", e)
         traceback.print_exc()
         return pd.DataFrame()
-
+        
 # -------------------------------
 # RUN FETCHES
 # -------------------------------
@@ -416,6 +415,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
