@@ -65,11 +65,17 @@ def normalize_team(s: str):
     return s
 
 def extract_player_name(outcome_name: str):
+    """
+    Extracts the player name from a prop string.
+    Example: "Justin Jefferson Over 85.5 Receiving Yds" -> "Justin Jefferson"
+    """
     if not outcome_name: return None
-    parts = re.split(r'\s+(?:over|under)\b|\(|\s+-\s+|\/|-', outcome_name, flags=re.I)
-    name = parts[0].strip()
-    name = re.sub(r'\d+$', '', name).strip()
-    return name
+    s = re.sub(r'over|under', '', outcome_name, flags=re.I)
+    s = re.sub(r'\(.*?\)', '', s)  # remove parentheses
+    s = re.sub(r'\d+\.?\d*\s*(yds|yards|td|touchdowns|receptions|rec)?', '', s, flags=re.I)
+    s = re.sub(r'[-–—]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s or None
 
 def flatten_columns(df):
     """Flatten MultiIndex columns into single strings."""
@@ -235,10 +241,12 @@ def fetch_live_odds(player_team_map):
         data = resp.json() if resp.status_code == 200 else []
 
         def infer_stat_type(outcome_name):
-            s = outcome_name.lower() if outcome_name else ''
-            if 'rush' in s and 'yd' in s: return 'rush_yds'
-            if 'rec' in s and 'yd' in s: return 'rec_yds'
+            if not outcome_name: return 'other'
+            s = outcome_name.lower()
+            if any(k in s for k in ['rush yd', 'rushing yds']): return 'rush_yds'
+            if any(k in s for k in ['rec yd', 'receiving yds']): return 'rec_yds'
             if re.search(r'\btd\b', s): return 'tds'
+            if any(k in s for k in ['receptions','rec']): return 'receptions'
             return 'other'
 
         odds_rows = []
@@ -256,13 +264,11 @@ def fetch_live_odds(player_team_map):
                         player_name_raw = extract_player_name(outcome_name)
                         player_name = player_name_raw.strip() if player_name_raw else outcome_name
 
-                        # Infer team if missing
+                        # Infer team from player_team_map
                         team = None
-                        last = normalize_name(player_name).split()[-1] if player_name else ''
-                        hnorm = normalize_team(home_team)
-                        anorm = normalize_team(away_team)
-                        if last in hnorm: team = home_team
-                        elif last in anorm: team = away_team
+                        player_norm = normalize_name(player_name)
+                        if player_norm in player_team_map:
+                            team = player_team_map[player_norm]
                         opponent = away_team if team == home_team else home_team
 
                         # Determine stat type
@@ -415,6 +421,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
