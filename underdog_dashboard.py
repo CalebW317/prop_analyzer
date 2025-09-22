@@ -198,7 +198,17 @@ else:
     exit()
 
 # -------------------------------
-# STEP 9: Update Google Sheets
+# STEP 9: Check if master_df is empty
+# -------------------------------
+print("Master DF shape:", master_df.shape)
+if not master_df.empty:
+    print(master_df.head())
+else:
+    print("⚠️ master_df is empty — no picks generated.")
+
+
+# -------------------------------
+# STEP 10: Update Google Sheets
 # -------------------------------
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(service_account_info, scopes=scopes)
@@ -219,3 +229,4 @@ except gspread.WorksheetNotFound:
 ws.clear()
 ws.update([pd.read_csv(MASTER_CSV).columns.values.tolist()] + pd.read_csv(MASTER_CSV).values.tolist())
 print(f"Google Sheets dashboard updated: {SHEET_NAME} → {WORKSHEET_NAME}")
+
