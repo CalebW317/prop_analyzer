@@ -28,7 +28,7 @@ jobs:
         run: pip install --upgrade pip && pip install -r requirements.txt
 
       - name: Run underdog script
-        run: python improved_underdog_dashboard.py
+        run: python underdog_dashboard.py
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
