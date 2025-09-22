@@ -45,12 +45,9 @@ def safe_float(val, default=0.0):
     try:
         if val is None:
             return default
-        # Some APIs return nested structures; handle that gracefully
         if isinstance(val, (int, float)):
             return float(val)
-        s = str(val).strip()
-        s = s.replace(',', '')
-        # remove trailing non-numeric characters
+        s = str(val).strip().replace(',', '')
         m = re.search(r"[-+]?\d*\.?\d+", s)
         if m:
             return float(m.group(0))
@@ -61,48 +58,32 @@ def safe_float(val, default=0.0):
 def normalize_name(s: str):
     if not isinstance(s, str):
         return ""
-    s = s.lower()
-    s = s.replace('.', '')
-    s = re.sub(r'[^a-z0-9\'\-\s]', ' ', s)  # keep letters, numbers, apostrophes, hyphens
+    s = s.lower().replace('.', '')
+    s = re.sub(r'[^a-z0-9\'\-\s]', ' ', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 def extract_player_name(outcome_name: str):
-    """
-    Extract the player name from an outcome label, e.g.:
-    "D. Adams Over 65.5 Receiving Yards" -> "D. Adams"
-    This uses simple heuristics: split on ' over ', ' under ', ' - ', '(' etc.
-    """
     if not outcome_name:
         return None
-    # split on common separators (case-insensitive)
     parts = re.split(r'\s+(?:over|under)\b|\(|\s+-\s+|\/|-', outcome_name, flags=re.I)
     name = parts[0].strip()
-    # trim trailing numbers if they got included
     name = re.sub(r'\d+$', '', name).strip()
     return name
 
 def infer_player_team_from_stats(outcome_name: str, player_team_map: dict):
-    """
-    Try to infer the player's team from the outcome text using the
-    player->team map from the player stats table.
-    Returns team or None.
-    """
     if not outcome_name:
         return None
     extracted = extract_player_name(outcome_name)
     if not extracted:
         return None
     n_extracted = normalize_name(extracted)
-    # exact match
     if n_extracted in player_team_map:
         return player_team_map[n_extracted]
-    # try last name matching
     last = n_extracted.split()[-1]
     candidates = [team for pname, team in player_team_map.items() if pname.split()[-1] == last]
     if len(candidates) == 1:
         return candidates[0]
-    # fallback: try substring match
     for pname, team in player_team_map.items():
         if last in pname:
             return team
@@ -121,115 +102,68 @@ def get_current_week():
 current_week = get_current_week()
 
 # -------------------------------
-# STEP 1: Fetch Player Stats (ESPN) with debug saving
+# STEP 1: Fetch Player Stats (Pro-Football-Reference)
 # -------------------------------
-def fetch_player_stats():
-    url = "https://www.espn.com/nfl/stats/player/_/season/2025/seasontype/2/table/rushing/sort/rushYards/dir/desc"
-    print(f"[DEBUG] Fetching ESPN player stats from {url}")
+def fetch_player_stats_pfr():
+    url = f"https://www.pro-football-reference.com/years/2025/rushing.htm"
+    print(f"[DEBUG] Fetching PFR rushing stats from {url}")
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        print(f"[DEBUG] ESPN player stats HTTP {resp.status_code}")
-        # Save debug HTML for inspection in Actions artifacts
-        with open("espn_player_debug.html", "w", encoding="utf-8") as f:
-            f.write(resp.text)
-        soup = BeautifulSoup(resp.content, 'lxml')
-        table = soup.find('table')
-        if not table:
-            print("[ERROR] Player stats table not found on ESPN page. Saved espn_player_debug.html for inspection.")
-            return pd.DataFrame()
-
-        rows = table.find_all('tr')[1:]
+        df_list = pd.read_html(url)
+        df_rush = df_list[0]
+        # remove repeated headers (PFR sometimes has multi-index)
+        df_rush = df_rush[df_rush['Player'] != 'Player']
+        df_rush = df_rush.fillna(0)
         players = []
-        for row in rows:
-            cols = row.find_all('td')
-            # ESPN tables sometimes have different layouts; guard by columns
-            if len(cols) < 6:
-                continue
-            try:
-                player_name = cols[1].get_text(strip=True)
-                team = cols[2].get_text(strip=True)
-                rush_yds = safe_float(cols[3].get_text())
-                snap_count = safe_float(cols[4].get_text()) or 1.0
-                # rec columns might shift depending on table; guard with try
-                rec_yds = safe_float(cols[6].get_text()) if len(cols) > 6 else 0.0
-                tds = safe_float(cols[9].get_text()) if len(cols) > 9 else 0.0
-                players.append({
-                    "player": player_name,
-                    "team": team,
-                    "rush_yds": rush_yds,
-                    "rec_yds": rec_yds,
-                    "tds": tds,
-                    "snap_count": max(snap_count, 1.0)
-                })
-            except Exception as e:
-                print("[WARN] Skipping a player row due to parse error:", e)
-                continue
-
+        for _, r in df_rush.iterrows():
+            player_name = r['Player']
+            team = r['Tm']
+            rush_yds = safe_float(r['Yds'])
+            tds = safe_float(r['TD'])
+            players.append({
+                "player": player_name,
+                "team": team,
+                "rush_yds": rush_yds,
+                "rec_yds": 0.0,  # we'll add rec later
+                "tds": tds,
+                "snap_count": 1.0
+            })
         df = pd.DataFrame(players)
         print(f"[DEBUG] player_stats_df shape: {df.shape}")
-        if not df.empty:
-            print(df.head())
         return df
     except Exception as e:
-        print("[ERROR] Exception fetching player stats:", e)
+        print("[ERROR] Exception fetching PFR player stats:", e)
         traceback.print_exc()
-        # save partial content if available
-        try:
-            with open("espn_player_debug_error.html", "w", encoding="utf-8") as f:
-                f.write(str(e))
-        except:
-            pass
         return pd.DataFrame()
 
 # -------------------------------
-# STEP 2: Fetch Opponent Defense (ESPN) with debug saving
+# STEP 2: Fetch Team Defense (Pro-Football-Reference)
 # -------------------------------
-def fetch_opponent_defense():
-    url = "https://www.espn.com/nfl/stats/team/_/view/defense"
-    print(f"[DEBUG] Fetching ESPN defense stats from {url}")
+def fetch_opponent_defense_pfr():
+    url = f"https://www.pro-football-reference.com/years/2025/opp.htm"
+    print(f"[DEBUG] Fetching PFR opponent defense stats from {url}")
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        print(f"[DEBUG] ESPN defense HTTP {resp.status_code}")
-        with open("espn_defense_debug.html", "w", encoding="utf-8") as f:
-            f.write(resp.text)
-        soup = BeautifulSoup(resp.content, 'lxml')
-        table = soup.find('table')
-        if not table:
-            print("[ERROR] Defense stats table not found on ESPN page. Saved espn_defense_debug.html for inspection.")
-            return pd.DataFrame()
+        df_list = pd.read_html(url)
+        df_def = df_list[0]
+        df_def = df_def[df_def['Team'] != 'Team']
+        df_def = df_def.fillna(0)
         defense_rows = []
-        rows = table.find_all('tr')[1:]
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) < 6:
-                continue
-            try:
-                team = cols[1].get_text(strip=True)
-                rush_allowed = safe_float(cols[3].get_text())
-                rec_allowed = safe_float(cols[6].get_text()) if len(cols) > 6 else 0.0
-                td_allowed = safe_float(cols[9].get_text()) if len(cols) > 9 else 0.0
-                defense_rows.append({
-                    "team": team,
-                    "rush_allowed": rush_allowed,
-                    "rec_allowed": rec_allowed,
-                    "td_allowed": td_allowed
-                })
-            except Exception as e:
-                print("[WARN] Skipping a defense row due to parse error:", e)
-                continue
+        for _, r in df_def.iterrows():
+            team = r['Team']
+            rush_allowed = safe_float(r['Yds.1'])  # rushing yds allowed
+            rec_allowed = safe_float(r['Yds.2'])   # passing yds allowed
+            td_allowed = safe_float(r['TD.1'])     # rushing TD allowed
+            defense_rows.append({
+                "team": team,
+                "rush_allowed": rush_allowed,
+                "rec_allowed": rec_allowed,
+                "td_allowed": td_allowed
+            })
         df = pd.DataFrame(defense_rows)
         print(f"[DEBUG] defense_df shape: {df.shape}")
-        if not df.empty:
-            print(df.head())
         return df
     except Exception as e:
-        print("[ERROR] Exception fetching defense stats:", e)
+        print("[ERROR] Exception fetching PFR defense stats:", e)
         traceback.print_exc()
-        try:
-            with open("espn_defense_debug_error.html", "w", encoding="utf-8") as f:
-                f.write(str(e))
-        except:
-            pass
         return pd.DataFrame()
 
 # -------------------------------
@@ -512,3 +446,4 @@ except Exception as e:
     exit(1)
 
 print("[SUCCESS] Script completed.")
+
