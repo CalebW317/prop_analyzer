@@ -96,40 +96,61 @@ current_week = get_current_week()
 # -------------------------------
 def fetch_player_stats_pfr():
     try:
-        # RUSHING
+        # ---- RUSHING ----
         rush_url = "https://www.pro-football-reference.com/years/2025/rushing.htm"
-        df_rush = pd.read_html(rush_url)[0].fillna(0)
-        player_col = detect_column(df_rush, ['Player'])
-        team_col = detect_column(df_rush, ['Tm', 'Team'])
-        if not player_col or not team_col:
-            raise ValueError(f"Could not detect columns in rushing table: {df_rush.columns}")
-        df_rush = df_rush[df_rush[player_col].str.lower() != 'player']
-        df_rush = df_rush[[player_col, team_col, 'Yds', 'TD']].copy()
-        df_rush.rename(columns={player_col:'Player', team_col:'Tm', 'Yds':'rush_yds','TD':'rush_tds'}, inplace=True)
+        df_rush_list = pd.read_html(rush_url)
+        df_rush = df_rush_list[0].fillna(0)
 
-        # RECEIVING
+        # Detect columns dynamically
+        player_col = detect_column(df_rush, ['Player', 'player'])
+        team_col = detect_column(df_rush, ['Tm', 'Team', 'team'])
+        rush_yds_col = detect_stat_column(df_rush, ['Yds','Rushing Yds'])
+        rush_td_col = detect_stat_column(df_rush, ['TD','Rushing TD'])
+
+        if not player_col or not team_col or not rush_yds_col or not rush_td_col:
+            raise ValueError(f"Could not detect rushing columns: {df_rush.columns}")
+
+        df_rush = df_rush[df_rush[player_col] != player_col]  # remove repeated header rows
+        df_rush = df_rush[[player_col, team_col, rush_yds_col, rush_td_col]].copy()
+        df_rush.rename(columns={player_col:'Player', team_col:'Tm',
+                                rush_yds_col:'rush_yds', rush_td_col:'rush_tds'}, inplace=True)
+
+        # ---- RECEIVING ----
         rec_url = "https://www.pro-football-reference.com/years/2025/receiving.htm"
-        df_rec = pd.read_html(rec_url)[0].fillna(0)
-        player_col = detect_column(df_rec, ['Player'])
-        team_col = detect_column(df_rec, ['Tm', 'Team'])
-        if not player_col or not team_col:
-            raise ValueError(f"Could not detect columns in receiving table: {df_rec.columns}")
-        df_rec = df_rec[df_rec[player_col].str.lower() != 'player']
-        df_rec = df_rec[[player_col, team_col, 'Yds', 'TD']].copy()
-        df_rec.rename(columns={player_col:'Player', team_col:'Tm','Yds':'rec_yds','TD':'rec_tds'}, inplace=True)
+        df_rec_list = pd.read_html(rec_url)
+        df_rec = df_rec_list[0].fillna(0)
 
-        # Merge
+        player_col = detect_column(df_rec, ['Player', 'player'])
+        team_col = detect_column(df_rec, ['Tm', 'Team', 'team'])
+        rec_yds_col = detect_stat_column(df_rec, ['Yds','Receiving Yds'])
+        rec_td_col = detect_stat_column(df_rec, ['TD','Receiving TD'])
+
+        if not player_col or not team_col or not rec_yds_col or not rec_td_col:
+            raise ValueError(f"Could not detect receiving columns: {df_rec.columns}")
+
+        df_rec = df_rec[df_rec[player_col] != player_col]
+        df_rec = df_rec[[player_col, team_col, rec_yds_col, rec_td_col]].copy()
+        df_rec.rename(columns={player_col:'Player', team_col:'Tm',
+                               rec_yds_col:'rec_yds', rec_td_col:'rec_tds'}, inplace=True)
+
+        # ---- MERGE ----
         df = pd.merge(df_rush, df_rec, on=['Player','Tm'], how='outer').fillna(0)
-        df_final = pd.DataFrame([{
-            "player": r['Player'],
-            "team": r['Tm'],
-            "rush_yds": safe_float(r['rush_yds']),
-            "rec_yds": safe_float(r['rec_yds']),
-            "tds": safe_float(r['rush_tds'] + r['rec_tds']),
-            "snap_count": 1.0
-        } for _, r in df.iterrows()])
+
+        players = []
+        for _, r in df.iterrows():
+            players.append({
+                "player": r['Player'],
+                "team": r['Tm'],
+                "rush_yds": safe_float(r['rush_yds']),
+                "rec_yds": safe_float(r['rec_yds']),
+                "tds": safe_float(r['rush_tds'] + r['rec_tds']),
+                "snap_count": 1.0  # placeholder; PFR doesn’t have snap counts
+            })
+
+        df_final = pd.DataFrame(players)
         print(f"[DEBUG] player_stats_df shape: {df_final.shape}")
         return df_final
+
     except Exception as e:
         print("[ERROR] Exception fetching PFR player stats:", e)
         traceback.print_exc()
@@ -138,28 +159,52 @@ def fetch_player_stats_pfr():
 # -------------------------------
 # FETCH DEFENSE
 # -------------------------------
+def detect_stat_column(df, keywords):
+    """Return the first column name containing any of the keywords (case-insensitive)."""
+    for col in df.columns:
+        for kw in keywords:
+            if kw.lower() in col.lower():
+                return col
+    return None
+
 def fetch_opponent_defense_pfr():
     url = "https://www.pro-football-reference.com/years/2025/opp.htm"
     print(f"[DEBUG] Fetching PFR opponent defense stats from {url}")
     try:
-        df_def = pd.read_html(url)[0].fillna(0)
-        team_col = detect_column(df_def, ['Team','Tm'])
-        if not team_col:
-            raise ValueError(f"Could not detect team column in defense table: {df_def.columns}")
-        df_def = df_def[df_def[team_col].str.lower() != 'team']
-        df_final = pd.DataFrame([{
-            "team": r[team_col],
-            "rush_allowed": safe_float(r.get('Yds.1',0)),
-            "rec_allowed": safe_float(r.get('Yds.2',0)),
-            "td_allowed": safe_float(r.get('TD.1',0)),
-            "td_pass_allowed": safe_float(r.get('TD.2',0))
-        } for _, r in df_def.iterrows()])
+        df_list = pd.read_html(url)
+        df_def = df_list[0].fillna(0)
+
+        # Detect columns
+        team_col = detect_column(df_def, ['Team', 'Tm', 'team'])
+        rush_allowed_col = detect_stat_column(df_def, ['Rushing Yds','Yds.1','Rush Yds'])
+        pass_allowed_col = detect_stat_column(df_def, ['Passing Yds','Yds.2','Pass Yds'])
+        rush_td_col = detect_stat_column(df_def, ['Rushing TD','TD.1'])
+        pass_td_col = detect_stat_column(df_def, ['Passing TD','TD.2'])
+
+        if not team_col or not rush_allowed_col or not pass_allowed_col or not rush_td_col or not pass_td_col:
+            raise ValueError(f"Could not detect all defense columns: {df_def.columns}")
+
+        df_def = df_def[df_def[team_col] != team_col]  # remove repeated header rows
+
+        defense_rows = []
+        for _, r in df_def.iterrows():
+            defense_rows.append({
+                "team": r[team_col],
+                "rush_allowed": safe_float(r.get(rush_allowed_col, 0)),
+                "rec_allowed": safe_float(r.get(pass_allowed_col, 0)),
+                "td_allowed": safe_float(r.get(rush_td_col, 0)),
+                "td_pass_allowed": safe_float(r.get(pass_td_col, 0))
+            })
+
+        df_final = pd.DataFrame(defense_rows)
         print(f"[DEBUG] defense_df shape: {df_final.shape}")
         return df_final
+
     except Exception as e:
         print("[ERROR] Exception fetching PFR defense stats:", e)
         traceback.print_exc()
         return pd.DataFrame()
+
 
 # -------------------------------
 # FETCH ODDS
@@ -338,3 +383,4 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
