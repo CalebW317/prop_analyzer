@@ -44,3 +44,9 @@ jobs:
         with:
           name: underdog-weekly-csv
           path: underdog_picks_master.csv
+          
+      - name: Upload debug file
+        uses: actions/upload-artifact@v4
+        with:
+          name: odds-api-debug
+          path: odds_api_debug.json
