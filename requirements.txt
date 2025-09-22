@@ -1,0 +1,7 @@
+gspread
+pandas
+google-auth
+requests
+beautifulsoup4
+lxml
+scikit-learn
