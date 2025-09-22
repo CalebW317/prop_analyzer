@@ -337,23 +337,8 @@ df['rec_usage'] = df['rec_yds'] / df['snap_count']
 # -------------------------------
 # DEBUG: SHOW POTENTIAL UNDERDOGS
 # -------------------------------
-print("[DEBUG] Inspecting odds and stats for potential underdogs...")
-for stat in ['rush_yds','rec_yds','tds']:
-    stat_map = {'rush_yds':'rush_avg_3','rec_yds':'rec_avg_3','tds':'td_rate'}
-    keyword = stat.split('_')[0]
-    df_stat = df[df['stat_type'].str.contains(keyword, case=False, na=False)].copy()
-    print(f"\n[DEBUG] Stat type '{stat}' -> df_stat shape: {df_stat.shape}")
-    if df_stat.empty:
-        print(f"[DEBUG] No matches found for stat type '{stat}'")
-        continue
-
-    df_stat['over_hit'] = (df_stat[stat_map[stat]].fillna(0) > df_stat['prop_line'].fillna(0)).astype(int)
-    df_stat['ev'] = (df_stat['over_hit'] * df_stat['odds']) - ((1 - df_stat['over_hit']) * STAKE)
-    df_stat['is_underdog'] = df_stat['odds'] > UNDERDOG_ODDS_THRESHOLD
-
-    # Print top 10 rows for inspection
-    display_cols = ['player','team','stat_type','prop_line','odds',stat_map[stat],'over_hit','ev','is_underdog']
-    print(df_stat[display_cols].head(10))
+print("[DEBUG] Unique stat_type values in odds_df:")
+print(df['stat_type'].unique())
 
 # -------------------------------
 # MODEL & EV
@@ -414,6 +399,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
