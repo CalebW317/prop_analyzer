@@ -221,46 +221,69 @@ def fetch_opponent_defense_pfr():
 # -------------------------------
 def fetch_live_odds(player_team_map):
     print("[DEBUG] Fetching live odds from Odds API")
-    params = {'apiKey': ODDS_API_KEY, 'regions': ODDS_REGION, 'markets': ODDS_MARKETS, 'oddsFormat': ODDS_FORMAT}
+    params = {
+        'apiKey': ODDS_API_KEY,
+        'regions': ODDS_REGION,
+        'markets': ODDS_MARKETS,
+        'oddsFormat': ODDS_FORMAT
+    }
     try:
         resp = requests.get(ODDS_API_URL, params=params, timeout=REQUEST_TIMEOUT, headers=HEADERS)
         print(f"[DEBUG] Odds API HTTP {resp.status_code}")
-        with open("odds_api_debug.json","w", encoding="utf-8") as f:
+        with open("odds_api_debug.json", "w", encoding="utf-8") as f:
             f.write(resp.text)
+
         data = resp.json() if resp.status_code == 200 else []
         odds_rows = []
+
         for game in data:
             home_team = game.get('home_team')
             away_team = game.get('away_team')
+
             for bookmaker in game.get('bookmakers', []):
                 for market in bookmaker.get('markets', []):
-                    key = market.get('key')
                     for outcome in market.get('outcomes', []):
-                        outcome_name = outcome.get('name')
+                        outcome_name = outcome.get('name') or ''
                         prop_line = safe_float(outcome.get('point'))
                         odds_val = safe_float(outcome.get('price'))
                         player_name_raw = extract_player_name(outcome_name)
                         player_name = player_name_raw.strip() if player_name_raw else outcome_name
+
+                        # Determine stat_type from outcome name
+                        outcome_lower = outcome_name.lower()
+                        if 'rush' in outcome_lower or 'rushing' in outcome_lower:
+                            stat_type = 'rush_yds'
+                        elif 'rec' in outcome_lower or 'receive' in outcome_lower or 'receiving' in outcome_lower:
+                            stat_type = 'rec_yds'
+                        elif 'td' in outcome_lower or 'touchdown' in outcome_lower:
+                            stat_type = 'tds'
+                        else:
+                            stat_type = 'other'
+
+                        # Infer team if missing
                         team = None
-                        # Fallback: fuzzy match last name with teams
-                        last = normalize_name(player_name).split()[-1] if player_name else ''
+                        last_name = normalize_name(player_name).split()[-1] if player_name else ''
                         hnorm = normalize_team(home_team)
                         anorm = normalize_team(away_team)
-                        if last in hnorm: team = home_team
-                        elif last in anorm: team = away_team
+                        if last_name in hnorm: team = home_team
+                        elif last_name in anorm: team = away_team
                         opponent = away_team if team == home_team else home_team
+
                         odds_rows.append({
                             "player": player_name,
                             "player_raw": outcome_name,
                             "prop_line": prop_line,
                             "odds": odds_val,
-                            "stat_type": key,
+                            "stat_type": stat_type,
                             "team": team,
                             "opponent": opponent
                         })
+
         df = pd.DataFrame(odds_rows)
         print(f"[DEBUG] odds_df shape: {df.shape}")
+        print(f"[DEBUG] Unique stat_type values in odds_df:\n{df['stat_type'].unique()}")
         return df
+
     except Exception as e:
         print("[ERROR] Exception fetching odds:", e)
         traceback.print_exc()
@@ -335,12 +358,6 @@ df['rush_usage'] = df['rush_yds'] / df['snap_count']
 df['rec_usage'] = df['rec_yds'] / df['snap_count']
 
 # -------------------------------
-# DEBUG: SHOW POTENTIAL UNDERDOGS
-# -------------------------------
-print("[DEBUG] Unique stat_type values in odds_df:")
-print(df['stat_type'].unique())
-
-# -------------------------------
 # MODEL & EV
 # -------------------------------
 master_rows = []
@@ -399,6 +416,7 @@ ws.clear()
 ws.update(data_to_write)
 
 print("[SUCCESS] Script completed.")
+
 
 
 
