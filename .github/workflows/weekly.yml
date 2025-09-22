@@ -36,7 +36,7 @@ jobs:
           UNDERDOG_ODDS_THRESHOLD: 1.9
 
       - name: Upload weekly CSV as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: underdog-weekly-csv
           path: undedog_picks_master.csv
