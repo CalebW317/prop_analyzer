@@ -39,4 +39,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: underdog-weekly-csv
-          path: undedog_picks_master.csv
+          path: underdog_picks_master.csv
