@@ -1,4 +1,4 @@
-# prop_analyzer_v2.py
+# prop_analyzer_final_v2.py
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -15,8 +15,8 @@ except ImportError:
 # -------------------------------
 DATA_FOLDER = Path('data')
 CACHE_FILE = DATA_FOLDER / 'nfl_data_cache.csv'
-CACHE_MAX_AGE_HOURS = 24  # How old the cache can be before re-downloading
-YEARS_TO_FETCH = [2021, 2022, 2023, 2024] # Seasons to grab data for
+CACHE_MAX_AGE_HOURS = 24
+YEARS_TO_FETCH = [2022, 2023, 2024] 
 
 # -------------------------------
 # DATA FETCHING & LOADING
@@ -24,19 +24,20 @@ YEARS_TO_FETCH = [2021, 2022, 2023, 2024] # Seasons to grab data for
 
 def fetch_data_from_api(years: list) -> pd.DataFrame:
     """
-    Fetches weekly player game data using the nfl_data_py library.
+    Fetches weekly player game data year by year. This version no longer
+    requests the unreliable 'opponent' column to avoid errors.
     """
     print(f"Fetching fresh data for seasons: {years}...")
     try:
-        # Define the specific columns we need to keep the DataFrame lean
+        # FINAL FIX: Removed 'opponent' from the list of columns to fetch.
         columns_to_get = [
-            'player_display_name', 'season', 'week', 'opponent', 'receptions', 
+            'player_display_name', 'season', 'week', 'receptions', 
             'receiving_yards', 'receiving_tds', 'carries', 'rushing_yards', 
             'rushing_tds', 'completions', 'passing_yards', 'passing_tds'
         ]
+        
         df = nfl.import_weekly_data(years=years, columns=columns_to_get)
         
-        # Rename columns for consistency with our analyzer
         df.rename(columns={
             'player_display_name': 'Player', 'season': 'Year', 'week': 'Week',
             'receptions': 'Rec', 'receiving_yards': 'Rec_Yds', 'receiving_tds': 'Rec_TD',
@@ -44,8 +45,7 @@ def fetch_data_from_api(years: list) -> pd.DataFrame:
             'completions': 'Pass_Cmp', 'passing_yards': 'Pass_Yds', 'passing_tds': 'Pass_TD'
         }, inplace=True)
 
-        # Create a total TD column
-        df['TD'] = df['Rec_TD'] + df['Rush_TD'] + df['Pass_TD']
+        df['TD'] = df['Rec_TD'].fillna(0) + df['Rush_TD'].fillna(0) + df['Pass_TD'].fillna(0)
         
         print("Fetch successful.")
         return df
@@ -59,10 +59,9 @@ def get_nfl_data() -> pd.DataFrame:
     Main data handler. Loads data from cache if it's recent, otherwise fetches
     fresh data from the API and updates the cache.
     """
-    DATA_FOLDER.mkdir(exist_ok=True) # Ensure the data folder exists
+    DATA_FOLDER.mkdir(exist_ok=True)
     
     if CACHE_FILE.exists():
-        # Check how old the file is
         file_mod_time = datetime.fromtimestamp(CACHE_FILE.stat().st_mtime)
         if datetime.now() - file_mod_time < timedelta(hours=CACHE_MAX_AGE_HOURS):
             print(f"Loading data from recent cache file: {CACHE_FILE}")
@@ -70,7 +69,6 @@ def get_nfl_data() -> pd.DataFrame:
         else:
             print("Cache file is outdated.")
     
-    # If we're here, cache is missing or old, so fetch new data
     df = fetch_data_from_api(YEARS_TO_FETCH)
     if not df.empty:
         df.to_csv(CACHE_FILE, index=False)
@@ -78,7 +76,7 @@ def get_nfl_data() -> pd.DataFrame:
     return df
 
 # -------------------------------
-# ANALYSIS & USER INTERFACE (No changes needed here)
+# ANALYSIS & USER INTERFACE
 # -------------------------------
 
 def get_user_input() -> tuple:
