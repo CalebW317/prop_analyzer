@@ -9,14 +9,15 @@ jobs:
   run-script:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Cache Python packages
+      - name: Cache pip packages
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
@@ -25,7 +26,9 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install --upgrade pip && pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run underdog script
         run: python underdog_dashboard.py
@@ -36,20 +39,8 @@ jobs:
           UNDERDOG_ODDS_THRESHOLD: 1.9
 
       - name: Upload weekly CSV as artifact
+        if: success() || failure()  # ensure CSV is uploaded even if script fails partially
         uses: actions/upload-artifact@v4
         with:
           name: underdog-weekly-csv
           path: underdog_picks_master.csv
-
-      - name: Upload debug artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: underdog-debug
-          path: |
-            espn_player_debug.html
-            espn_defense_debug.html
-            odds_api_debug.json
-            espn_player_debug_error.html
-            espn_defense_debug_error.html
-
