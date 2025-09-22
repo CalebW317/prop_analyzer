@@ -38,6 +38,9 @@ jobs:
           STAKE: 1
           UNDERDOG_ODDS_THRESHOLD: 1.9
 
+      - name: run discover_markets script
+        run: python discover_markets.py
+
       - name: Upload weekly CSV as artifact
         if: success() || failure()  # ensure CSV is uploaded even if script fails partially
         uses: actions/upload-artifact@v4
