@@ -1,6 +1,7 @@
 nfl-data-py
 pandas
 numpy
+streamlit
 onnx2json==2.0.4
 setuptools==78.1.1
 wheel==0.45.1
