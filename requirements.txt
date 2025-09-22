@@ -1,6 +1,4 @@
 nfl-data-py
-pandas
-numpy
 streamlit
 scipy
 altair
